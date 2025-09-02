@@ -3,13 +3,17 @@ import { chromium } from "playwright";
 
 const START_URL = "https://www.contratacion.euskadi.eus/webkpe00-kpeperfi/es/ac70cPublicidadWar/busquedaAnuncios?locale=es";
 
+// patrones de URLs de detalle de expediente (muy restrictivo)
+const DETAIL_RE = /(\/contenidos\/anuncio_contratacion\/expjaso\d+\/|\/anuncio_contratacion\/expjaso\d+\/|expjaso\d+\/es_doc\/|expjaso\d+\.html)/i;
+
 await Actor.main(async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
 
   const waitIdle = async (ms = 10000) => { try { await page.waitForLoadState("networkidle", { timeout: ms }); } catch {} };
+  const shortPause = async (ms = 400) => { try { await page.waitForTimeout(ms); } catch {} };
 
-  // ---------------- Utils de lectura en detalle ----------------
+  // ---- utilidades de extracción en detalle ----
   const extractFirstDate = (txt) => txt?.match(/\b\d{2}\/\d{2}\/\d{4}\b/)?.[0] || null;
 
   const readBlockByLabel = async (ctx, labels) => {
@@ -82,20 +86,18 @@ await Actor.main(async () => {
     }
   };
 
-  // --------------- 1) Abrir buscador y cookies -------------------
+  // ---- 1) Abrir buscador + cookies ----
   log.info("Abriendo buscador…");
   await page.goto(START_URL, { waitUntil: "domcontentloaded" });
   await waitIdle();
   try {
     const cookiesBtn = page.getByRole("button", { name: /(aceptar|aceptar todas|onartu)/i });
     if (await cookiesBtn.isVisible({ timeout: 2500 }).catch(() => false)) {
-      await cookiesBtn.click(); 
-      await waitIdle();
+      await cookiesBtn.click(); await waitIdle();
     }
   } catch {}
 
-  // --------------- 2) Aplicar filtros ----------------------------
-  // Intento directo por label; si no, fuerza por texto de option
+  // ---- 2) Aplicar filtros (Suministros + Abierto) ----
   const forceSelectByOptionText = async (text) => {
     return page.evaluate((optText) => {
       function norm(s){ return (s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,""); }
@@ -122,102 +124,105 @@ await Actor.main(async () => {
 
   log.info(`Filtros aplicados: tipo=${okTipo} estado=${okEstado}`);
 
-  // --------------- 3) Buscar ------------------------------------
+  // ---- 3) Buscar ----
   try {
     const btn = page.getByRole("button", { name: /buscar/i });
     if (await btn.isVisible().catch(() => false)) await btn.click();
     else await page.click("button[type='submit']").catch(() => {});
     log.info("Buscar disparado");
   } catch {}
-  await waitIdle();
-  await page.waitForTimeout(800);
+  await waitIdle(12000);
+  await shortPause(600);
 
-  // --------------- 4) Paginación + scraping de cada página -------
-  // Selectores de filas de resultados y de paginación
-  const ROWS_SEL = ".filaResultado, .resultado, [data-anuncio], table tbody tr";
-  const visited = new Set();
-
-  const getPageDetailLinks = async () => {
-    // intentar links que apunten a anuncio/expediente
-    const links = await page.evaluate(() => {
+  // ---- helpers de recolección de enlaces y paginación ----
+  const collectDetailLinks = async (ctx) => {
+    return await ctx.evaluate((DETAIL_RE_STR) => {
+      const DETAIL_RE = new RegExp(DETAIL_RE_STR, "i");
       const abs = (u) => new URL(u, location.href).toString();
-      const as = Array.from(document.querySelectorAll(".filaResultado a[href], .resultado a[href], [data-anuncio] a[href], table tbody tr a[href]"));
-      const urls = as
-        .map(a => abs(a.getAttribute("href") || ""))
-        .filter(u => u && !u.includes("busquedaAnuncios"))
-        .filter(u => /(contenidos\/anuncio_contratacion\/expjaso\d+|anuncio_contratacion\/expjaso\d+|expjaso\d+\/es_doc\/|expjaso\d+\.html)/i.test(u));
-      return Array.from(new Set(urls));
-    });
-    return links;
+
+      const scopes = [
+        document.querySelector("#resultados"),
+        document.querySelector("main"),
+        document.body,
+      ].filter(Boolean);
+
+      const urls = new Set();
+      for (const root of scopes) {
+        const anchors = Array.from(root.querySelectorAll("a[href]"));
+        for (const a of anchors) {
+          const href = a.getAttribute("href") || "";
+          if (!href || href.startsWith("#")) continue;
+          if (/^javascript:/i.test(href)) continue;
+          const url = abs(href);
+          if (url.includes("busquedaAnuncios")) continue;
+          if (!DETAIL_RE.test(url)) continue;
+          urls.add(url);
+          if (urls.size >= 500) break;
+        }
+        if (urls.size >= 500) break;
+      }
+      return Array.from(urls);
+    }, DETAIL_RE.source);
   };
 
   const gotoNextPage = async () => {
-    // intenta varios selectores de “Siguiente” habilitado
-    const candidates = [
+    const tries = [
       "a[rel='next']:not([aria-disabled='true'])",
       "button[rel='next']:not([disabled])",
       "a[aria-label*='Siguiente']:not(.disabled)",
       "button[aria-label*='Siguiente']:not([disabled])",
-      "a:has-text('Siguiente')",
-      "a:has-text('Hurrengoa')",
       "a.paginacionSiguiente:not(.disabled)",
-      ".pagination a[title*='Siguiente']:not(.disabled)",
       "li.next:not(.disabled) a",
+      "xpath=//a[contains(.,'Siguiente') or contains(.,'Hurrengoa')][not(contains(@class,'disabled'))]"
     ];
-
-    for (const sel of candidates) {
+    for (const sel of tries) {
       const el = page.locator(sel).first();
       if (await el.isVisible().catch(()=>false)) {
-        const disabled = await el.getAttribute("aria-disabled").catch(()=>null);
-        if (disabled === "true") continue;
-        await el.click({ timeout: 2000 }).catch(()=>{});
-        await waitIdle();
-        await page.waitForTimeout(500);
+        await el.click().catch(()=>{});
+        await waitIdle(8000);
+        await shortPause(400);
         return true;
       }
     }
-
-    // Fallback: buscar por XPATH el enlace Siguiente que no esté deshabilitado
-    try {
-      const link = page.locator("xpath=//a[contains(.,'Siguiente') or contains(.,'Hurrengoa')][not(contains(@class,'disabled'))]").first();
-      if (await link.isVisible().catch(()=>false)) {
-        await link.click();
-        await waitIdle();
-        await page.waitForTimeout(500);
-        return true;
-      }
-    } catch {}
-
-    return false; // no hay más páginas
+    return false;
   };
 
+  // ---- 4) Paginación completa y scraping de cada anuncio ----
+  const visited = new Set();
   let pageIndex = 1;
+
   while (true) {
-    // 4.1) Filas visibles
-    const n = await page.locator(ROWS_SEL).count().catch(() => 0);
-    log.info(`Página ${pageIndex}: filas detectadas = ${n}`);
+    // recolectar enlaces en la página y en sus iframes (si existen)
+    let links = new Set(await collectDetailLinks(page));
+    for (const fr of page.frames()) {
+      try { (await collectDetailLinks(fr)).forEach(u => links.add(u)); } catch {}
+    }
 
-    // 4.2) Enlaces de detalle en esta página
-    const links = await getPageDetailLinks();
-    log.info(`Página ${pageIndex}: enlaces de detalle = ${links.length}`);
+    const list = Array.from(links);
+    log.info(`Página ${pageIndex}: enlaces de expediente detectados = ${list.length}`);
 
-    // 4.3) Procesar cada enlace (evitando duplicados)
-    for (const href of links) {
+    if (!list.length && pageIndex === 1) {
+      // si en la primera página no detecta nada, guardo debug y salgo (así no “parece” que no hace nada)
+      await Actor.setValue("debug_no_results_first.png", await page.screenshot({ fullPage: true }), { contentType: "image/png" });
+      await Actor.setValue("debug_no_results_first.html", await page.content(), { contentType: "text/html; charset=utf-8" });
+      log.error("No se detectaron anuncios en la primera página. Revisa debug_no_results_first.*");
+      break;
+    }
+
+    // visitar cada detalle (evitando duplicados)
+    for (const href of list) {
       if (visited.has(href)) continue;
       visited.add(href);
       log.info(`→ Detalle: ${href}`);
       await scrapeDetail(href);
     }
 
-    // 4.4) Intentar pasar a la siguiente página
+    // siguiente página
     const hasNext = await gotoNextPage();
     if (!hasNext) break;
     pageIndex++;
-    // pequeña espera extra por si la paginación es AJAX
-    await waitIdle();
-    await page.waitForTimeout(500);
   }
 
   await browser.close();
-  log.info(`Hecho. Total enlaces únicos procesados: ${visited.size}`);
+  log.info(`Hecho. Total anuncios procesados: ${visited.size}`);
 });
