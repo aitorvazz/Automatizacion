@@ -3,7 +3,7 @@ import { chromium } from "playwright";
 
 const START_URL = "https://www.contratacion.euskadi.eus/webkpe00-kpeperfi/es/ac70cPublicidadWar/busquedaAnuncios?locale=es";
 
-// patrones de URLs de detalle de expediente (muy restrictivo)
+// Aceptamos SOLO URLs de expediente / anuncio reales (evita “contacto”, “normativa”, etc.)
 const DETAIL_RE = /(\/contenidos\/anuncio_contratacion\/expjaso\d+\/|\/anuncio_contratacion\/expjaso\d+\/|expjaso\d+\/es_doc\/|expjaso\d+\.html)/i;
 
 await Actor.main(async () => {
@@ -11,14 +11,15 @@ await Actor.main(async () => {
   const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
 
   const waitIdle = async (ms = 10000) => { try { await page.waitForLoadState("networkidle", { timeout: ms }); } catch {} };
-  const shortPause = async (ms = 400) => { try { await page.waitForTimeout(ms); } catch {} };
+  const pause = async (ms = 400) => { try { await page.waitForTimeout(ms); } catch {} };
 
-  // ---- utilidades de extracción en detalle ----
+  // ---------- helpers lectura en detalle ----------
   const extractFirstDate = (txt) => txt?.match(/\b\d{2}\/\d{2}\/\d{4}\b/)?.[0] || null;
 
   const readBlockByLabel = async (ctx, labels) => {
     for (const lbl of labels) {
       try {
+        // por texto exacto y por contains
         let node = ctx.locator(`text="${lbl}"`).first();
         if (!(await node.isVisible().catch(() => false))) {
           node = ctx.locator(`xpath=//*[contains(normalize-space(.),'${lbl}')]`).first();
@@ -86,18 +87,19 @@ await Actor.main(async () => {
     }
   };
 
-  // ---- 1) Abrir buscador + cookies ----
+  // ---------- 1) Abrir + cookies ----------
   log.info("Abriendo buscador…");
   await page.goto(START_URL, { waitUntil: "domcontentloaded" });
   await waitIdle();
   try {
     const cookiesBtn = page.getByRole("button", { name: /(aceptar|aceptar todas|onartu)/i });
     if (await cookiesBtn.isVisible({ timeout: 2500 }).catch(() => false)) {
-      await cookiesBtn.click(); await waitIdle();
+      await cookiesBtn.click();
+      await waitIdle();
     }
   } catch {}
 
-  // ---- 2) Aplicar filtros (Suministros + Abierto) ----
+  // ---------- 2) Aplicar filtros ----------
   const forceSelectByOptionText = async (text) => {
     return page.evaluate((optText) => {
       function norm(s){ return (s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,""); }
@@ -115,52 +117,80 @@ await Actor.main(async () => {
     }, text);
   };
 
-  let okTipo=false, okEstado=false;
-  try { const c = page.getByLabel("Tipo de contrato", { exact:false }); if (await c.isVisible({ timeout:800 }).catch(()=>false)) { await c.selectOption({ label:"Suministros" }); okTipo=true; } } catch {}
-  if (!okTipo) okTipo = await forceSelectByOptionText("Suministros");
-
-  try { const e = page.getByLabel("Estado", { exact:false }); if (await e.isVisible({ timeout:800 }).catch(()=>false)) { await e.selectOption({ label:"Abierto" }); okEstado=true; } } catch {}
-  if (!okEstado) okEstado = await forceSelectByOptionText("Abierto");
-
-  log.info(`Filtros aplicados: tipo=${okTipo} estado=${okEstado}`);
-
-  // ---- 3) Buscar ----
   try {
-    const btn = page.getByRole("button", { name: /buscar/i });
-    if (await btn.isVisible().catch(() => false)) await btn.click();
-    else await page.click("button[type='submit']").catch(() => {});
+    let okTipo=false, okEstado=false;
+    try { const c = page.getByLabel("Tipo de contrato", { exact:false }); if (await c.isVisible({ timeout:800 }).catch(()=>false)) { await c.selectOption({ label:"Suministros" }); okTipo=true; } } catch {}
+    if (!okTipo) okTipo = await forceSelectByOptionText("Suministros");
+
+    try { const e = page.getByLabel("Estado", { exact:false }); if (await e.isVisible({ timeout:800 }).catch(()=>false)) { await e.selectOption({ label:"Abierto" }); okEstado=true; } } catch {}
+    if (!okEstado) okEstado = await forceSelectByOptionText("Abierto");
+
+    log.info(`Filtros aplicados: tipo=${okTipo} estado=${okEstado}`);
+  } catch (e) {
+    log.warning(`No se pudieron aplicar los filtros de forma directa: ${String(e)}`);
+  }
+
+  // ---------- 3) Buscar ----------
+  try {
+    const btn = page.getByRole("button", { name:/buscar/i });
+    if (await btn.isVisible().catch(()=>false)) await btn.click();
+    else await page.click("button[type='submit']").catch(()=>{});
     log.info("Buscar disparado");
   } catch {}
   await waitIdle(12000);
-  await shortPause(600);
+  await pause(600);
 
-  // ---- helpers de recolección de enlaces y paginación ----
-  const collectDetailLinks = async (ctx) => {
+  // ---------- 4) Recolectar EN ESTA PÁGINA los enlaces de anuncio ----------
+  const collectDetailLinksFromResults = async (ctx) => {
     return await ctx.evaluate((DETAIL_RE_STR) => {
       const DETAIL_RE = new RegExp(DETAIL_RE_STR, "i");
       const abs = (u) => new URL(u, location.href).toString();
 
-      const scopes = [
-        document.querySelector("#resultados"),
-        document.querySelector("main"),
-        document.body,
-      ].filter(Boolean);
+      // 1) Intento por tarjetas/filas que contengan “Código del expediente” o “Expediente”
+      const CAND_LABELS = [/c[oó]digo del expediente/i, /\bexpediente\b/i];
+
+      const resultsScope = document.querySelector("#resultados") || document.querySelector("main") || document.body;
+      const cards = Array.from(resultsScope.querySelectorAll("*"))
+        .filter(el => CAND_LABELS.some(rx => rx.test(el.textContent || "")));
 
       const urls = new Set();
-      for (const root of scopes) {
-        const anchors = Array.from(root.querySelectorAll("a[href]"));
+
+      // sube hasta 4 niveles para encontrar la “tarjeta/fila” y dentro busca <a>
+      const getCard = (el) => {
+        let cur = el, steps = 0;
+        while (cur && steps < 4) { 
+          if (cur.matches("article, tr, li, .card, .resultado, .filaResultado, .result, .anuncio")) return cur;
+          cur = cur.parentElement; steps++;
+        }
+        return el.parentElement || el;
+      };
+
+      for (const el of cards) {
+        const card = getCard(el);
+        const anchors = Array.from(card.querySelectorAll("a[href]"));
         for (const a of anchors) {
           const href = a.getAttribute("href") || "";
-          if (!href || href.startsWith("#")) continue;
-          if (/^javascript:/i.test(href)) continue;
+          if (!href || href.startsWith("#") || /^javascript:/i.test(href)) continue;
           const url = abs(href);
           if (url.includes("busquedaAnuncios")) continue;
           if (!DETAIL_RE.test(url)) continue;
           urls.add(url);
-          if (urls.size >= 500) break;
         }
-        if (urls.size >= 500) break;
       }
+
+      // 2) Fallback adicional: anchors en los contenedores de resultados, filtrados por patrón
+      if (urls.size === 0) {
+        const anchors = Array.from(resultsScope.querySelectorAll("a[href]"));
+        for (const a of anchors) {
+          const href = a.getAttribute("href") || "";
+          if (!href || href.startsWith("#") || /^javascript:/i.test(href)) continue;
+          const url = abs(href);
+          if (url.includes("busquedaAnuncios")) continue;
+          if (!DETAIL_RE.test(url)) continue;
+          urls.add(url);
+        }
+      }
+
       return Array.from(urls);
     }, DETAIL_RE.source);
   };
@@ -180,36 +210,37 @@ await Actor.main(async () => {
       if (await el.isVisible().catch(()=>false)) {
         await el.click().catch(()=>{});
         await waitIdle(8000);
-        await shortPause(400);
+        await pause(400);
         return true;
       }
     }
     return false;
   };
 
-  // ---- 4) Paginación completa y scraping de cada anuncio ----
+  // ---------- 5) Paginar y extraer ----------
   const visited = new Set();
   let pageIndex = 1;
 
   while (true) {
-    // recolectar enlaces en la página y en sus iframes (si existen)
-    let links = new Set(await collectDetailLinks(page));
+    // enlaces en ESTA página (intento principal por “Código del expediente / Expediente”)
+    let links = new Set(await collectDetailLinksFromResults(page));
+
+    // también mirar iframes si los hubiera (misma lógica)
     for (const fr of page.frames()) {
-      try { (await collectDetailLinks(fr)).forEach(u => links.add(u)); } catch {}
+      try { (await collectDetailLinksFromResults(fr)).forEach(u => links.add(u)); } catch {}
     }
 
     const list = Array.from(links);
-    log.info(`Página ${pageIndex}: enlaces de expediente detectados = ${list.length}`);
+    log.info(`Página ${pageIndex}: anuncios encontrados = ${list.length}`);
 
-    if (!list.length && pageIndex === 1) {
-      // si en la primera página no detecta nada, guardo debug y salgo (así no “parece” que no hace nada)
-      await Actor.setValue("debug_no_results_first.png", await page.screenshot({ fullPage: true }), { contentType: "image/png" });
-      await Actor.setValue("debug_no_results_first.html", await page.content(), { contentType: "text/html; charset=utf-8" });
-      log.error("No se detectaron anuncios en la primera página. Revisa debug_no_results_first.*");
+    if (pageIndex === 1 && !list.length) {
+      await Actor.setValue("debug_first_page.png", await page.screenshot({ fullPage: true }), { contentType: "image/png" });
+      await Actor.setValue("debug_first_page.html", await page.content(), { contentType: "text/html; charset=utf-8" });
+      log.error("No se detectaron anuncios en la primera página. Revisa debug_first_page.*");
       break;
     }
 
-    // visitar cada detalle (evitando duplicados)
+    // procesar cada anuncio
     for (const href of list) {
       if (visited.has(href)) continue;
       visited.add(href);
