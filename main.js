@@ -1,7 +1,7 @@
 import { Actor, log } from "apify";
 import { chromium } from "playwright";
 
-const URL = "https://www.contratacion.euskadi.eus/webkpe00-kpeperfi/es/ac70cPublicidadWar/busquedaAnuncios?locale=es";
+const START_URL = "https://www.contratacion.euskadi.eus/webkpe00-kpeperfi/es/ac70cPublicidadWar/busquedaAnuncios?locale=es";
 
 await Actor.main(async () => {
   const browser = await chromium.launch({ headless: true });
@@ -14,7 +14,7 @@ await Actor.main(async () => {
   };
 
   log.info("Abriendo búsqueda…");
-  await page.goto(URL, { waitUntil: "domcontentloaded" });
+  await page.goto(START_URL, { waitUntil: "domcontentloaded" });
   await waitIdle();
 
   // --- Cookies ---
@@ -31,7 +31,6 @@ await Actor.main(async () => {
   async function setSelectByLabelJS(labelText, visibleText) {
     return page.evaluate(({ labelText, visibleText }) => {
       function findSelectNearLabel(labelTxt) {
-        // 1) label[for]
         const labels = Array.from(document.querySelectorAll("label"));
         let targetSelect = null;
         for (const lb of labels) {
@@ -42,10 +41,8 @@ await Actor.main(async () => {
               const byFor = document.getElementById(forId);
               if (byFor && byFor.tagName === "SELECT") { targetSelect = byFor; break; }
             }
-            // 2) primer select en los siguientes hermanos
             const sel = lb.parentElement?.querySelector("select") || lb.nextElementSibling?.querySelector?.("select");
             if (sel) { targetSelect = sel; break; }
-            // 3) buscar en el documento (fallback)
             const allSelects = Array.from(document.querySelectorAll("select"));
             for (const s of allSelects) {
               if (s.id?.toLowerCase().includes("tipo") && labelTxt.toLowerCase().includes("tipo")) { targetSelect = s; break; }
@@ -70,11 +67,9 @@ await Actor.main(async () => {
   // Helper: RUP combo (combobox) — click, escribir y Enter
   async function setComboByLabel(label, text) {
     try {
-      // localizar combobox accesible cercano a la etiqueta
       const combo = page.locator(`xpath=//label[contains(normalize-space(.),'${label}')]/following::*[@role='combobox' or contains(@class,'rup_combo')][1]`);
       if (!(await combo.first().isVisible({ timeout: 3000 }).catch(() => false))) return false;
       await combo.first().click();
-      // si hay input editable dentro
       const innerInput = combo.locator("input, .ui-autocomplete-input").first();
       if (await innerInput.isVisible().catch(() => false)) {
         await innerInput.fill("");
@@ -82,7 +77,6 @@ await Actor.main(async () => {
         await page.keyboard.press("Enter");
         return true;
       } else {
-        // abrir desplegable y escoger por lista
         await page.keyboard.type(text, { delay: 50 });
         await page.keyboard.press("Enter");
         return true;
@@ -94,7 +88,6 @@ await Actor.main(async () => {
 
   // Helper principal para aplicar filtro con 3 intentos
   async function applyFilter(label, valueText) {
-    // 1) intentamos getByLabel().selectOption()
     try {
       const ctrl = page.getByLabel(label, { exact: false });
       if (await ctrl.isVisible({ timeout: 1000 }).catch(() => false)) {
@@ -102,13 +95,10 @@ await Actor.main(async () => {
         return true;
       }
     } catch {}
-    // 2) intentamos JS directo sobre <select>
     const okJS = await setSelectByLabelJS(label, valueText);
     if (okJS) return true;
-    // 3) intentamos combo RUP
     const okCombo = await setComboByLabel(label, valueText);
     if (okCombo) return true;
-
     return false;
   }
 
@@ -136,7 +126,6 @@ await Actor.main(async () => {
     count = await rows.count().catch(() => 0);
   }
   if (!count) {
-    // último recurso: lista de anchors hacia detalle
     rows = page.locator("a[href*='ac70cPublicidadWar'][href*='ver'], a[href*='PublicidadWar']");
     count = await rows.count().catch(() => 0);
   }
@@ -145,10 +134,8 @@ await Actor.main(async () => {
   // Utilidad: leer valor por etiqueta en ficha
   const readField = async (detailPage, labelText) => {
     try {
-      // prueba exacta
       let node = detailPage.locator(`text="${labelText}"`).first();
       if (!(await node.isVisible().catch(() => false))) {
-        // prueba contiene
         node = detailPage.locator(`xpath=//*[contains(normalize-space(.),'${labelText}')]`).first();
       }
       if (!(await node.isVisible().catch(() => false))) return null;
@@ -161,7 +148,6 @@ await Actor.main(async () => {
   };
 
   for (let i = 0; i < count; i++) {
-    // Obtener enlace y título desde la fila/anchor detectado
     let anchor;
     if (await rows.nth(i).locator("a").count().catch(() => 0)) {
       anchor = rows.nth(i).locator("a").first();
@@ -170,10 +156,9 @@ await Actor.main(async () => {
     }
     const titulo = (await anchor.innerText().catch(() => "")).trim();
     const href = await anchor.getAttribute("href").catch(() => null);
-    const enlace = href ? new URL(href, page.url()).toString() : null;
+    const enlace = href ? new URL(href, page.url()).toString() : null; // ahora usa la clase global URL correctamente
     if (!enlace) continue;
 
-    // Ir al detalle
     await page.goto(enlace, { waitUntil: "domcontentloaded" });
     await waitIdle();
 
@@ -202,7 +187,6 @@ await Actor.main(async () => {
     log.info(`→ ${item.titulo || enlace}`);
     await Actor.pushData(item);
 
-    // Volver a la lista
     await page.goBack({ waitUntil: "domcontentloaded" }).catch(() => {});
     await waitIdle();
   }
