@@ -1,15 +1,14 @@
 import { Actor, log } from "apify";
 import { chromium } from "playwright";
-import fetch from "node-fetch";
 import { XMLParser } from "fast-xml-parser";
 
 const RSS_URL = "https://www.contratacion.euskadi.eus/w32-kpeperfi/eu/r01PubWar/rssFeed?anuncios=true"; 
-// ⚠️ Ajusta esta URL al feed RSS correcto de suministros abiertos, ahora pongo un ejemplo genérico
+// ⚠️ Ajusta esta URL al feed RSS correcto de suministros abiertos
 
 await Actor.main(async () => {
   // 1) Descargar y parsear el RSS
   log.info("Descargando RSS...");
-  const res = await fetch(RSS_URL);
+  const res = await fetch(RSS_URL); // usamos fetch nativo de Node 18+
   const xml = await res.text();
   const parser = new XMLParser({ ignoreAttributes: false });
   const rss = parser.parse(xml);
@@ -21,7 +20,11 @@ await Actor.main(async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
 
-  const waitIdle = async () => { try { await page.waitForLoadState("networkidle", { timeout: 10000 }); } catch {} };
+  const waitIdle = async () => { 
+    try { 
+      await page.waitForLoadState("networkidle", { timeout: 10000 }); 
+    } catch {} 
+  };
 
   // Helpers para leer ficha
   const readBlockByLabel = async (detailPage, variants) => {
