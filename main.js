@@ -21,15 +21,16 @@ await Actor.main(async () => {
 
   // --- APLICA FILTROS ---
   try {
-    // Busca select por label
-    await page.locator("label:has-text('Tipo de contrato')").locator(".. select").selectOption({ label: /Suministros/i });
-    await page.locator("label:has-text('Estado')").locator(".. select").selectOption({ label: /Abierto/i });
+    await page.locator("label:has-text('Tipo de contrato')").locator(".. select")
+      .selectOption({ label: "Suministros" });
+    await page.locator("label:has-text('Estado')").locator(".. select")
+      .selectOption({ label: "Abierto" });
     log.info("Filtros aplicados");
   } catch (e) {
     log.warning("No se pudieron aplicar los filtros: " + e.message);
   }
 
-  // Botón Buscar
+  // --- Botón Buscar ---
   try {
     const btn = page.getByRole("button", { name: /buscar/i });
     if (await btn.isVisible().catch(() => false)) await btn.click();
@@ -37,7 +38,7 @@ await Actor.main(async () => {
     log.info("Click en buscar");
   } catch {}
 
-  await page.waitForTimeout(5000); // da tiempo a que cargue resultados
+  await page.waitForTimeout(5000); // espera a que carguen resultados
 
   // --- LISTA DE RESULTADOS ---
   const rows = page.locator("table tbody tr, .resultado, .filaResultado");
