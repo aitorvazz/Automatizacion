@@ -83,15 +83,15 @@ await Actor.main(async () => {
 
   // 3) Escanear TODOS los anchors y quedarnos con fichas de anuncio
   //    - descartamos cualquier URL que contenga "busquedaAnuncios"
-  //    - aceptamos rutas con "PublicidadWar" pero que NO sean la de búsqueda; típicamente incluyen "ver", "anuncio", "expediente", etc.
+  //    - aceptamos rutas con "PublicidadWar" (ver/detalle/anuncio/expediente/contrato)
   const detailLinks = await page.evaluate((base) => {
     const as = Array.from(document.querySelectorAll("a[href]"));
     const cleaned = as
       .map(a => ({ href: a.getAttribute("href") || "", abs: a.href, text: (a.textContent || "").trim() }))
       .filter(x => x.href && !x.href.startsWith("#"))
       .filter(x => !/^javascript:/i.test(x.href))
-      .filter(x => !x.abs.includes("busquedaAnuncios")) // clave: descartar el buscador
-      .filter(x => /PublicidadWar/i.test(x.abs) || /ac70c/i.test(x.abs)) // dentro de la app
+      .filter(x => !x.abs.includes("busquedaAnuncios")) // descarta buscador
+      .filter(x => /PublicidadWar/i.test(x.abs) || /ac70c/i.test(x.abs))
       .filter(x => /(ver|detalle|anuncio|expediente|contrato|kpe)/i.test(x.href + " " + x.text))
       .map(x => x.abs);
     return Array.from(new Set(cleaned));
@@ -100,7 +100,6 @@ await Actor.main(async () => {
   log.info(`Enlaces de detalle detectados: ${detailLinks.length}`);
 
   if (!detailLinks.length) {
-    // Guardar captura y HTML para ver la estructura real y ajustar selectores sin adivinar
     try {
       await Actor.setValue("debug_links.png", await page.screenshot({ fullPage: true }), { contentType: "image/png" });
       await Actor.setValue("debug_links.html", await page.content(), { contentType: "text/html; charset=utf-8" });
@@ -110,8 +109,8 @@ await Actor.main(async () => {
     return;
   }
 
-  // -------- lector genérico de campos por etiqueta --------
-  const readField = async (detailPage, variants) => {
+  // -------- Lectores genéricos en ficha --------
+  const readBlockByLabel = async (detailPage, variants) => {
     for (const labelText of variants) {
       try {
         let node = detailPage.locator(`text="${labelText}"`).first();
@@ -127,32 +126,81 @@ await Actor.main(async () => {
     return null;
   };
 
-  // 4) Visitar cada detalle y extraer campos
+  const readHrefByLabel = async (detailPage, variants) => {
+    // Busca un <a> cercano al label o por texto clave
+    for (const labelText of variants) {
+      try {
+        // 1) link siguiente al label
+        const linkNear = detailPage.locator(`xpath=//*[contains(normalize-space(.),'${labelText}')]/following::a[1]`).first();
+        if (await linkNear.isVisible().catch(() => false)) {
+          const href = await linkNear.getAttribute("href").catch(() => null);
+          if (href) return new URL(href, detailPage.url()).toString();
+        }
+        // 2) anchors por texto típico
+        const linkByText = detailPage.locator("a:has-text('licitación electrónica'), a:has-text('presentación electrónica'), a:has-text('oferta electrónica')");
+        if (await linkByText.first().isVisible().catch(() => false)) {
+          const href = await linkByText.first().getAttribute("href").catch(() => null);
+          if (href) return new URL(href, detailPage.url()).toString();
+        }
+      } catch {}
+    }
+    return null;
+  };
+
+  const extractFirstDate = (txt) => {
+    if (!txt) return null;
+    const m = txt.match(/\b\d{2}\/\d{2}\/\d{4}\b/);
+    return m ? m[0] : null;
+  };
+
+  // 4) Visitar cada detalle y extraer TUS CAMPOS
   for (const enlace of detailLinks) {
     await page.goto(enlace, { waitUntil: "domcontentloaded" });
     await waitIdle();
 
     const titulo = (await page.locator("h1, .titulo, .cabecera h1").first().innerText().catch(() => "")).trim() || null;
-    const organoTxt = await readField(page, ["Órgano", "Órgano de contratación"]);
-    const procedimientoTxt = await readField(page, ["Procedimiento"]);
-    const presupuestoTxt = await readField(page, ["Presupuesto", "Presupuesto base de licitación"]);
-    const valorEstimadoTxt = await readField(page, ["Valor estimado"]);
-    const presentacionTxt = await readField(page, ["Presentación de ofertas", "Fecha fin de presentación", "Fin de plazo de presentación"]);
-    const cpvTxt = await readField(page, ["CPV", "Códigos CPV"]);
 
-    const cpv = cpvTxt ? (cpvTxt.match(/\b\d{8}\b/) || [null])[0] : null;
-    const presupuesto = presupuestoTxt ? (presupuestoTxt.match(/([\d\.\s]+,\d{2})\s*€?/) || [null, null])[1] : null;
-    const valorEstimado = valorEstimadoTxt ? (valorEstimadoTxt.match(/([\d\.\s]+,\d{2})\s*€?/) || [null, null])[1] : null;
-    const fechaLimite = presentacionTxt ? (presentacionTxt.match(/\b\d{2}\/\d{2}\/\d{4}\b/) || [null])[0] : null;
+    // Campos solicitados (con variantes de etiqueta habituales)
+    const expedienteTxt = await readBlockByLabel(page, ["Expediente", "Nº de expediente", "Número de expediente"]);
+    const fechaPrimeraTxt = await readBlockByLabel(page, ["Fecha primera publicación", "Primera publicación"]);
+    const fechaUltimaTxt = await readBlockByLabel(page, ["Fecha última publicación", "Última publicación", "Fecha de la última publicación"]);
+    const tipoContratoTxt = await readBlockByLabel(page, ["Tipo de contrato", "Tipo contrato"]);
+    const estadoTramTxt = await readBlockByLabel(page, ["Estado de la tramitación", "Estado", "Situación"]);
+    const plazoPresentacionTxt = await readBlockByLabel(page, ["Plazo de presentación", "Plazo presentación"]);
+    const fechaLimiteTxt = await readBlockByLabel(page, ["Fecha límite de presentación", "Fin de plazo de presentación", "Fecha fin de presentación"]);
+    const presupuestoSinIvaTxt = await readBlockByLabel(page, ["Presupuesto del contrato sin IVA", "Presupuesto sin IVA", "Importe sin IVA"]);
+    const poderAdjudicadorTxt = await readBlockByLabel(page, ["Poder adjudicador", "Tipo de poder adjudicador"]);
+    const entidadImpulsoraTxt = await readBlockByLabel(page, ["Entidad Impulsora", "Unidad gestora", "Órgano impulsor"]);
+    const urlLicitacion = await readHrefByLabel(page, ["Dirección web de licitación electrónica", "Licitación electrónica", "Presentación electrónica"]);
 
+    // Normalizaciones / picks
+    const expediente = expedienteTxt ? (expedienteTxt.match(/expediente[:\s]*([A-Za-z0-9\/\-\._]+)/i)?.[1] || expedienteTxt) : null;
+    const fechaPrimeraPublicacion = extractFirstDate(fechaPrimeraTxt);
+    const fechaUltimaPublicacion = extractFirstDate(fechaUltimaTxt);
+    const tipoContrato = tipoContratoTxt ? tipoContratoTxt.replace(/\s+/g, " ").trim() : null;
+    const estadoTramitacion = estadoTramTxt ? estadoTramTxt.replace(/\s+/g, " ").trim() : null;
+    const plazoPresentacion = plazoPresentacionTxt ? plazoPresentacionTxt.replace(/\s+/g, " ").trim() : null;
+    const fechaLimitePresentacion = extractFirstDate(fechaLimiteTxt);
+    const presupuestoSinIVA = presupuestoSinIvaTxt ? ((presupuestoSinIvaTxt.match(/([\d\.\s]+,\d{2})\s*€?/) || [null,null])[1]) : null;
+    const poderAdjudicador = poderAdjudicadorTxt ? poderAdjudicadorTxt.replace(/\s+/g, " ").trim() : null;
+    const entidadImpulsora = entidadImpulsoraTxt ? entidadImpulsoraTxt.replace(/\s+/g, " ").trim() : null;
+    const direccionLicitacionElectronica = urlLicitacion || null;
+
+    // Empujar con tus claves finales (más título/enlace para contexto)
     await Actor.pushData({
-      titulo, enlace,
-      organo: organoTxt || null,
-      procedimiento: procedimientoTxt || null,
-      presupuesto,
-      valorEstimado,
-      fechaLimite,
-      cpv
+      titulo,
+      enlace,
+      expediente,
+      fechaPrimeraPublicacion,
+      fechaUltimaPublicacion,
+      tipoContrato,
+      estadoTramitacion,
+      plazoPresentacion,
+      fechaLimitePresentacion,
+      presupuestoSinIVA,
+      poderAdjudicador,
+      entidadImpulsora,
+      direccionLicitacionElectronica
     });
   }
 
