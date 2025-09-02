@@ -2,7 +2,7 @@ import { Actor, log } from "apify";
 import { chromium } from "playwright";
 import { XMLParser } from "fast-xml-parser";
 
-const RSS_URL = "https://www.contratacion.euskadi.eus/w32-kpeperfi/eu/r01PubWar/rssFeed?anuncios=true"; 
+const RSS_URL = "https://www.contratacion.euskadi.eus/w32-kpeperfi/es/r01PubWar/rssFeed?anuncios=true&tipoContrato=SUMINISTROS&estado=ABIERTO";
 // ⚠️ Ajusta esta URL al feed RSS correcto de suministros abiertos
 
 await Actor.main(async () => {
