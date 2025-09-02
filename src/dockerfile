@@ -1,0 +1,10 @@
+FROM apify/actor-node-playwright-chrome:20
+
+# Copia tu código dentro del contenedor
+COPY . ./
+
+# Instala dependencias (ya trae Chromium dentro de la imagen)
+RUN npm install --omit=dev
+
+# Comando por defecto
+CMD ["npm", "start"]
