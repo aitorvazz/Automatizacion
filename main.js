@@ -10,17 +10,37 @@ await Actor.main(async () => {
   log.info("Abriendo búsqueda…");
   await page.goto(URL, { waitUntil: "domcontentloaded" });
 
-  // --- APLICA FILTROS (ajusta si el name/label cambia) ---
-  await page.selectOption("select[name='tipoContrato']", { label: /Suministros/i }).catch(()=>{});
-  await page.selectOption("select[name='estado']", { label: /Abierto/i }).catch(()=>{});
-  // Botón Buscar (por rol o por CSS genérico)
-  const btn = page.getByRole("button", { name: /buscar/i });
-  if (await btn.isVisible().catch(()=>false)) await btn.click();
-  else await page.click("button[type='submit']").catch(()=>{});
-  await page.waitForLoadState("networkidle");
+  // --- Aceptar cookies ---
+  try {
+    const cookiesBtn = page.getByRole("button", { name: /(aceptar|onartu)/i });
+    if (await cookiesBtn.isVisible()) {
+      await cookiesBtn.click();
+      log.info("Cookies aceptadas");
+    }
+  } catch {}
 
-  // --- LISTA DE RESULTADOS (ajusta el contenedor si hiciera falta) ---
-  const rows = page.locator("[data-anuncio], .anuncio, .filaResultado, .resultado");
+  // --- APLICA FILTROS ---
+  try {
+    // Busca select por label
+    await page.locator("label:has-text('Tipo de contrato')").locator(".. select").selectOption({ label: /Suministros/i });
+    await page.locator("label:has-text('Estado')").locator(".. select").selectOption({ label: /Abierto/i });
+    log.info("Filtros aplicados");
+  } catch (e) {
+    log.warning("No se pudieron aplicar los filtros: " + e.message);
+  }
+
+  // Botón Buscar
+  try {
+    const btn = page.getByRole("button", { name: /buscar/i });
+    if (await btn.isVisible().catch(() => false)) await btn.click();
+    else await page.click("button[type='submit']").catch(() => {});
+    log.info("Click en buscar");
+  } catch {}
+
+  await page.waitForTimeout(5000); // da tiempo a que cargue resultados
+
+  // --- LISTA DE RESULTADOS ---
+  const rows = page.locator("table tbody tr, .resultado, .filaResultado");
   const count = await rows.count().catch(() => 0);
   log.info(`Resultados en la primera página: ${count}`);
 
