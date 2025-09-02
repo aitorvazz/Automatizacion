@@ -1,9 +1,10 @@
 import { Actor, log } from "apify";
 import { chromium } from "playwright";
 
-const START_URL = "https://www.contratacion.euskadi.eus/webkpe00-kpeperfi/es/ac70cPublicidadWar/busquedaAnuncios?locale=es";
+// 👉 Página de resultados con filtros ya aplicados (la que nos pasas)
+const RESULTS_URL = "https://www.contratacion.euskadi.eus/ac70cPublicidadWar/informacionAmpliadaAnuncios/search";
 
-// Aceptamos SOLO URLs de expediente / anuncio reales (evita “contacto”, “normativa”, etc.)
+// Aceptamos SOLO URLs de expediente/anuncio reales
 const DETAIL_RE = /(\/contenidos\/anuncio_contratacion\/expjaso\d+\/|\/anuncio_contratacion\/expjaso\d+\/|expjaso\d+\/es_doc\/|expjaso\d+\.html)/i;
 
 await Actor.main(async () => {
@@ -19,7 +20,6 @@ await Actor.main(async () => {
   const readBlockByLabel = async (ctx, labels) => {
     for (const lbl of labels) {
       try {
-        // por texto exacto y por contains
         let node = ctx.locator(`text="${lbl}"`).first();
         if (!(await node.isVisible().catch(() => false))) {
           node = ctx.locator(`xpath=//*[contains(normalize-space(.),'${lbl}')]`).first();
@@ -87,75 +87,27 @@ await Actor.main(async () => {
     }
   };
 
-  // ---------- 1) Abrir + cookies ----------
-  log.info("Abriendo buscador…");
-  await page.goto(START_URL, { waitUntil: "domcontentloaded" });
-  await waitIdle();
-  try {
-    const cookiesBtn = page.getByRole("button", { name: /(aceptar|aceptar todas|onartu)/i });
-    if (await cookiesBtn.isVisible({ timeout: 2500 }).catch(() => false)) {
-      await cookiesBtn.click();
-      await waitIdle();
-    }
-  } catch {}
-
-  // ---------- 2) Aplicar filtros ----------
-  const forceSelectByOptionText = async (text) => {
-    return page.evaluate((optText) => {
-      function norm(s){ return (s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,""); }
-      const wants = norm(optText);
-      for (const sel of Array.from(document.querySelectorAll("select"))) {
-        const found = Array.from(sel.options).find(o => norm(o.textContent||"").includes(wants));
-        if (found) {
-          sel.value = found.value;
-          sel.dispatchEvent(new Event("input", { bubbles: true }));
-          sel.dispatchEvent(new Event("change", { bubbles: true }));
-          return true;
-        }
-      }
-      return false;
-    }, text);
-  };
-
-  try {
-    let okTipo=false, okEstado=false;
-    try { const c = page.getByLabel("Tipo de contrato", { exact:false }); if (await c.isVisible({ timeout:800 }).catch(()=>false)) { await c.selectOption({ label:"Suministros" }); okTipo=true; } } catch {}
-    if (!okTipo) okTipo = await forceSelectByOptionText("Suministros");
-
-    try { const e = page.getByLabel("Estado", { exact:false }); if (await e.isVisible({ timeout:800 }).catch(()=>false)) { await e.selectOption({ label:"Abierto" }); okEstado=true; } } catch {}
-    if (!okEstado) okEstado = await forceSelectByOptionText("Abierto");
-
-    log.info(`Filtros aplicados: tipo=${okTipo} estado=${okEstado}`);
-  } catch (e) {
-    log.warning(`No se pudieron aplicar los filtros de forma directa: ${String(e)}`);
-  }
-
-  // ---------- 3) Buscar ----------
-  try {
-    const btn = page.getByRole("button", { name:/buscar/i });
-    if (await btn.isVisible().catch(()=>false)) await btn.click();
-    else await page.click("button[type='submit']").catch(()=>{});
-    log.info("Buscar disparado");
-  } catch {}
+  // ---------- 1) Abrir DIRECTAMENTE la lista filtrada ----------
+  log.info("Abriendo lista filtrada…");
+  await page.goto(RESULTS_URL, { waitUntil: "domcontentloaded" });
   await waitIdle(12000);
   await pause(600);
 
-  // ---------- 4) Recolectar EN ESTA PÁGINA los enlaces de anuncio ----------
+  // ---------- 2) Recolectar enlaces de anuncio en esta página ----------
   const collectDetailLinksFromResults = async (ctx) => {
     return await ctx.evaluate((DETAIL_RE_STR) => {
       const DETAIL_RE = new RegExp(DETAIL_RE_STR, "i");
       const abs = (u) => new URL(u, location.href).toString();
 
-      // 1) Intento por tarjetas/filas que contengan “Código del expediente” o “Expediente”
-      const CAND_LABELS = [/c[oó]digo del expediente/i, /\bexpediente\b/i];
-
+      // contenedores típicos de resultados
       const resultsScope = document.querySelector("#resultados") || document.querySelector("main") || document.body;
+
+      // Preferencia: tarjetas/filas que contengan “Código del expediente” o “Expediente”
+      const CAND_LABELS = [/c[oó]digo del expediente/i, /\bexpediente\b/i];
       const cards = Array.from(resultsScope.querySelectorAll("*"))
         .filter(el => CAND_LABELS.some(rx => rx.test(el.textContent || "")));
 
       const urls = new Set();
-
-      // sube hasta 4 niveles para encontrar la “tarjeta/fila” y dentro busca <a>
       const getCard = (el) => {
         let cur = el, steps = 0;
         while (cur && steps < 4) { 
@@ -172,20 +124,18 @@ await Actor.main(async () => {
           const href = a.getAttribute("href") || "";
           if (!href || href.startsWith("#") || /^javascript:/i.test(href)) continue;
           const url = abs(href);
-          if (url.includes("busquedaAnuncios")) continue;
           if (!DETAIL_RE.test(url)) continue;
           urls.add(url);
         }
       }
 
-      // 2) Fallback adicional: anchors en los contenedores de resultados, filtrados por patrón
+      // Fallback: anchors de todo el scope filtrados por patrón
       if (urls.size === 0) {
         const anchors = Array.from(resultsScope.querySelectorAll("a[href]"));
         for (const a of anchors) {
           const href = a.getAttribute("href") || "";
           if (!href || href.startsWith("#") || /^javascript:/i.test(href)) continue;
           const url = abs(href);
-          if (url.includes("busquedaAnuncios")) continue;
           if (!DETAIL_RE.test(url)) continue;
           urls.add(url);
         }
@@ -195,6 +145,7 @@ await Actor.main(async () => {
     }, DETAIL_RE.source);
   };
 
+  // ---------- 3) Botón “Siguiente” ----------
   const gotoNextPage = async () => {
     const tries = [
       "a[rel='next']:not([aria-disabled='true'])",
@@ -217,15 +168,13 @@ await Actor.main(async () => {
     return false;
   };
 
-  // ---------- 5) Paginar y extraer ----------
+  // ---------- 4) Paginar y extraer ----------
   const visited = new Set();
   let pageIndex = 1;
 
   while (true) {
-    // enlaces en ESTA página (intento principal por “Código del expediente / Expediente”)
+    // enlaces en ESTA página (misma lógica también para iframes, por si acaso)
     let links = new Set(await collectDetailLinksFromResults(page));
-
-    // también mirar iframes si los hubiera (misma lógica)
     for (const fr of page.frames()) {
       try { (await collectDetailLinksFromResults(fr)).forEach(u => links.add(u)); } catch {}
     }
@@ -240,7 +189,6 @@ await Actor.main(async () => {
       break;
     }
 
-    // procesar cada anuncio
     for (const href of list) {
       if (visited.has(href)) continue;
       visited.add(href);
@@ -248,7 +196,6 @@ await Actor.main(async () => {
       await scrapeDetail(href);
     }
 
-    // siguiente página
     const hasNext = await gotoNextPage();
     if (!hasNext) break;
     pageIndex++;
