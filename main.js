@@ -3,13 +3,18 @@ import { chromium } from "playwright";
 
 const START_URL = "https://www.contratacion.euskadi.eus/webkpe00-kpeperfi/es/ac70cPublicidadWar/busquedaAnuncios?locale=es";
 
+// Aceptamos SOLO URLs que contengan un expediente real "expjasoNNNNN"
+const DETAIL_RE = /(\/contenidos\/anuncio_contratacion\/expjaso\d+\/|\/anuncio_contratacion\/expjaso\d+\/|expjaso\d+\/es_doc\/|expjaso\d+\.html)/i;
+
+// Límite para no agotar tiempo (ajusta a 40/60 si quieres)
+const MAX_DETAILS = 30;
+
 await Actor.main(async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
-
   const waitIdle = async (ms = 12000) => { try { await page.waitForLoadState("networkidle", { timeout: ms }); } catch {} };
 
-  // ---- Utilidades genéricas ----
+  // --- Utils de detalle ---
   const extractFirstDate = (txt) => {
     if (!txt) return null;
     const m = txt.match(/\b\d{2}\/\d{2}\/\d{4}\b/);
@@ -20,7 +25,9 @@ await Actor.main(async () => {
     for (const labelText of variants) {
       try {
         let node = ctx.locator(`text="${labelText}"`).first();
-        if (!(await node.isVisible().catch(() => false))) node = ctx.locator(`xpath=//*[contains(normalize-space(.),'${labelText}')]`).first();
+        if (!(await node.isVisible().catch(() => false))) {
+          node = ctx.locator(`xpath=//*[contains(normalize-space(.),'${labelText}')]`).first();
+        }
         if (!(await node.isVisible().catch(() => false))) continue;
         const block = await node.locator("xpath=..").innerText().catch(() => "");
         if (!block) continue;
@@ -43,20 +50,20 @@ await Actor.main(async () => {
     return null;
   };
 
-  async function scrapeDetail(ctx, enlace, tituloHint) {
+  const scrapeDetail = async (ctx, enlace, tituloHint) => {
     const titulo = (await ctx.locator("h1, .titulo, .cabecera h1").first().innerText().catch(() => "")).trim() || tituloHint || null;
 
-    const expedienteTxt          = await readBlockByLabel(ctx, ["Expediente", "Nº de expediente", "Número de expediente"]);
-    const fechaPrimeraTxt        = await readBlockByLabel(ctx, ["Fecha primera publicación", "Primera publicación"]);
-    const fechaUltimaTxt         = await readBlockByLabel(ctx, ["Fecha última publicación", "Última publicación", "Fecha de la última publicación"]);
-    const tipoContratoTxt        = await readBlockByLabel(ctx, ["Tipo de contrato", "Tipo contrato"]);
-    const estadoTramTxt          = await readBlockByLabel(ctx, ["Estado de la tramitación", "Estado", "Situación"]);
-    const plazoPresentacionTxt   = await readBlockByLabel(ctx, ["Plazo de presentación", "Plazo presentación"]);
-    const fechaLimiteTxt         = await readBlockByLabel(ctx, ["Fecha límite de presentación", "Fin de plazo de presentación", "Fecha fin de presentación"]);
-    const presupuestoSinIvaTxt   = await readBlockByLabel(ctx, ["Presupuesto del contrato sin IVA", "Presupuesto sin IVA", "Importe sin IVA"]);
-    const poderAdjudicadorTxt    = await readBlockByLabel(ctx, ["Poder adjudicador", "Tipo de poder adjudicador"]);
-    const entidadImpulsoraTxt    = await readBlockByLabel(ctx, ["Entidad Impulsora", "Unidad gestora", "Órgano impulsor"]);
-    const urlLicitacion          = await readHrefByLabel(ctx, ["Dirección web de licitación electrónica", "Licitación electrónica", "Presentación electrónica"]);
+    const expedienteTxt        = await readBlockByLabel(ctx, ["Expediente", "Nº de expediente", "Número de expediente"]);
+    const fechaPrimeraTxt      = await readBlockByLabel(ctx, ["Fecha primera publicación", "Primera publicación"]);
+    const fechaUltimaTxt       = await readBlockByLabel(ctx, ["Fecha última publicación", "Última publicación", "Fecha de la última publicación"]);
+    const tipoContratoTxt      = await readBlockByLabel(ctx, ["Tipo de contrato", "Tipo contrato"]);
+    const estadoTramTxt        = await readBlockByLabel(ctx, ["Estado de la tramitación", "Estado", "Situación"]);
+    const plazoPresentacionTxt = await readBlockByLabel(ctx, ["Plazo de presentación", "Plazo presentación"]);
+    const fechaLimiteTxt       = await readBlockByLabel(ctx, ["Fecha límite de presentación", "Fin de plazo de presentación", "Fecha fin de presentación"]);
+    const presupuestoSinIvaTxt = await readBlockByLabel(ctx, ["Presupuesto del contrato sin IVA", "Presupuesto sin IVA", "Importe sin IVA"]);
+    const poderAdjudicadorTxt  = await readBlockByLabel(ctx, ["Poder adjudicador", "Tipo de poder adjudicador"]);
+    const entidadImpulsoraTxt  = await readBlockByLabel(ctx, ["Entidad Impulsora", "Unidad gestora", "Órgano impulsor"]);
+    const urlLicitacion        = await readHrefByLabel(ctx, ["Dirección web de licitación electrónica", "Licitación electrónica", "Presentación electrónica"]);
 
     const expediente = expedienteTxt ? (expedienteTxt.match(/expediente[:\s]*([A-Za-z0-9\/\-\._]+)/i)?.[1] || expedienteTxt) : null;
 
@@ -75,18 +82,20 @@ await Actor.main(async () => {
       entidadImpulsora       : entidadImpulsoraTxt || null,
       direccionLicitacionElectronica: urlLicitacion || null,
     });
-  }
+  };
 
-  // ---- 1) Abrir buscador + cookies ----
+  // --- 1) Abrir y cookies ---
   log.info("Abriendo buscador…");
   await page.goto(START_URL, { waitUntil: "domcontentloaded" });
   await waitIdle();
   try {
     const cookiesBtn = page.getByRole("button", { name: /(aceptar|aceptar todas|onartu)/i });
-    if (await cookiesBtn.isVisible({ timeout: 2500 }).catch(() => false)) { await cookiesBtn.click(); await waitIdle(); }
+    if (await cookiesBtn.isVisible({ timeout: 2500 }).catch(() => false)) {
+      await cookiesBtn.click(); await waitIdle();
+    }
   } catch {}
 
-  // ---- 2) Aplicar filtros (Suministros + Abierto) ----
+  // --- 2) Aplicar filtros (Suministros + Abierto) ---
   async function forceSelectByOptionText(optionTextContains) {
     return page.evaluate((optText) => {
       function norm(s){ return (s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,""); }
@@ -106,102 +115,92 @@ await Actor.main(async () => {
     }, optionTextContains);
   }
 
-  let okTipo=false, okEstado=false;
-  try { const c = page.getByLabel("Tipo de contrato", { exact:false }); if (await c.isVisible({timeout:800}).catch(()=>false)) { await c.selectOption({ label:"Suministros" }, { timeout:3500 }); okTipo=true; } } catch {}
+  let okTipo = false, okEstado = false;
+  try {
+    const ctrl = page.getByLabel("Tipo de contrato", { exact: false });
+    if (await ctrl.isVisible({ timeout: 800 }).catch(() => false)) {
+      await ctrl.selectOption({ label: "Suministros" }, { timeout: 3500 });
+      okTipo = true;
+    }
+  } catch {}
   if (!okTipo) okTipo = await forceSelectByOptionText("Suministros");
 
-  try { const e = page.getByLabel("Estado", { exact:false }); if (await e.isVisible({timeout:800}).catch(()=>false)) { await e.selectOption({ label:"Abierto" }, { timeout:3500 }); okEstado=true; } } catch {}
+  try {
+    const ctrlE = page.getByLabel("Estado", { exact: false });
+    if (await ctrlE.isVisible({ timeout: 800 }).catch(() => false)) {
+      await ctrlE.selectOption({ label: "Abierto" }, { timeout: 3500 });
+      okEstado = true;
+    }
+  } catch {}
   if (!okEstado) okEstado = await forceSelectByOptionText("Abierto");
 
   log.info(`Filtros aplicados: tipo=${okTipo} estado=${okEstado}`);
 
-  // ---- 3) Disparar Buscar de forma robusta ----
-  let searched = false;
-  try { const btn = page.getByRole("button", { name:/buscar/i }); if (await btn.isVisible({timeout:1200}).catch(()=>false)) { await btn.click(); searched=true; } } catch {}
-  if (!searched) { try { await page.click("button[type='submit'], input[type='submit']", { timeout:1500 }); searched=true; } catch {} }
-  if (!searched) { try { await page.evaluate(()=>{ const f=document.querySelector("form"); if (f) f.requestSubmit ? f.requestSubmit() : f.submit(); }); searched=true; } catch {} }
-  if (!searched) { try { await page.keyboard.press("Enter"); searched=true; } catch {} }
-  if (searched) log.info("Buscar disparado");
+  // --- 3) Buscar ---
+  try {
+    const btn = page.getByRole("button", { name: /buscar/i });
+    if (await btn.isVisible().catch(() => false)) await btn.click();
+    else await page.click("button[type='submit']").catch(() => {});
+  } catch {}
   await waitIdle(15000);
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(1000);
 
-  // ---- 4) Capturar POPUPS (por si abre resultados en nueva ventana) ----
-  const popupLinks = new Set();
-  page.on("popup", async (pop) => {
-    try {
-      await pop.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(()=>{});
-      popupLinks.add(pop.url());
-    } catch {}
-  });
-
-  // ---- 5) Escuchar RESPUESTAS de red con URLs interesantes ----
-  const netLinks = new Set();
-  page.on("response", async (resp) => {
-    try {
-      const url = resp.url();
-      if (/(con|contenidos)\/anuncio_contratacion|PublicidadWar|expjaso|es_doc|ver|detalle/i.test(url)) {
-        netLinks.add(url);
-      }
-    } catch {}
-  });
-
-  // ---- 6) Recolectar enlaces de detalle desde página + iframes ----
-  async function collectDetailLinksFromContext(ctx) {
-    return await ctx.evaluate(() => {
+  // --- 4) Escanear todos los <a> (página + iframes) y FILTRAR por expjaso ---
+  const collectLinks = async (ctx) => {
+    return await ctx.evaluate((DETAIL_RE_STR) => {
+      const DETAIL_RE = new RegExp(DETAIL_RE_STR, "i");
       const abs = (u) => new URL(u, location.href).toString();
-      const anchors = Array.from(document.querySelectorAll("a[href]"))
-        .map(a => abs(a.getAttribute("href")))
-        .filter(u => !!u)
-        .filter(u => !u.includes("busquedaAnuncios"))
-        .filter(u => !/^javascript:/i.test(u))
-        .filter(u => /(con|contenidos)\/anuncio_contratacion|PublicidadWar|expjaso|es_doc|ver|detalle|expediente|contrato|KPE/i.test(u));
-      return Array.from(new Set(anchors));
-    });
-  }
+
+      // intentar restringir a contenedores típicos de resultados
+      const scopes = [
+        document.querySelector("#resultados"),
+        document.querySelector("#main"),
+        document.querySelector("main"),
+        document.querySelector(".resultadoBusqueda"),
+        document.querySelector(".resultados"),
+        document.body, // fallback
+      ].filter(Boolean);
+
+      const urls = new Set();
+      for (const root of scopes) {
+        const anchors = Array.from(root.querySelectorAll("a[href]"));
+        for (const a of anchors) {
+          const href = a.getAttribute("href") || "";
+          if (!href || href.startsWith("#")) continue;
+          if (/^javascript:/i.test(href)) continue;
+          const url = abs(href);
+          if (url.includes("busquedaAnuncios")) continue;
+          if (!DETAIL_RE.test(url)) continue; // ← SOLO expjaso/anuncio_contratacion
+          urls.add(url);
+          if (urls.size >= 250) break;
+        }
+        if (urls.size >= 250) break;
+      }
+      return Array.from(urls);
+    }, DETAIL_RE.source);
+  };
 
   // scroll para forzar cargas perezosas
-  try { await page.mouse.wheel(0, 2000); await page.waitForTimeout(500); await page.mouse.wheel(0, -2000); } catch {}
+  try { await page.mouse.wheel(0, 2000); await page.waitForTimeout(400); await page.mouse.wheel(0, -2000); } catch {}
 
-  let detailLinks = new Set(await collectDetailLinksFromContext(page));
-
-  // iframes
+  const allLinks = new Set(await collectLinks(page));
   for (const fr of page.frames()) {
-    try {
-      const urls = await collectDetailLinksFromContext(fr);
-      urls.forEach(u => detailLinks.add(u));
-    } catch {}
+    try { (await collectLinks(fr)).forEach(u => allLinks.add(u)); } catch {}
   }
 
-  // combinar con lo que haya detectado red/popup
-  netLinks.forEach(u => detailLinks.add(u));
-  popupLinks.forEach(u => detailLinks.add(u));
-
-  const links = Array.from(detailLinks);
-  log.info(`Enlaces de detalle detectados (agregados): ${links.length}`);
+  // filtro final + limitar a MAX_DETAILS
+  const links = Array.from(allLinks).filter(u => DETAIL_RE.test(u)).slice(0, MAX_DETAILS);
+  log.info(`Enlaces de detalle VÁLIDOS: ${links.length}`);
 
   if (!links.length) {
-    // guardamos material de depuración útil
-    try {
-      await Actor.setValue("debug_after_search_main.png", await page.screenshot({ fullPage: true }), { contentType: "image/png" });
-      await Actor.setValue("debug_after_search_main.html", await page.content(), { contentType: "text/html; charset=utf-8" });
-      const frames = page.frames();
-      let i = 0;
-      for (const fr of frames) {
-        try {
-          const png = await fr.screenshot({ fullPage: true }).catch(() => null);
-          if (png) await Actor.setValue(`debug_after_search_frame_${i}.png`, png, { contentType: "image/png" });
-          const html = await fr.content().catch(() => null);
-          if (html) await Actor.setValue(`debug_after_search_frame_${i}.html`, html, { contentType: "text/html; charset=utf-8" });
-        } catch {}
-        i++;
-      }
-    } catch {}
-    log.error("No se detectaron enlaces de detalle. Revisa las capturas/HTML en el Key-Value Store.");
+    await Actor.setValue("debug_no_valid_links.png", await page.screenshot({ fullPage: true }), { contentType: "image/png" });
+    await Actor.setValue("debug_no_valid_links.html", await page.content(), { contentType: "text/html; charset=utf-8" });
+    log.error("No se detectaron enlaces de expediente (expjaso…). Revisa debug_no_valid_links.*");
     await browser.close();
     return;
   }
 
-  // ---- 7) Visitar cada detalle y extraer TUS 11 CAMPOS ----
+  // --- 5) Visitar detalle y extraer tus 11 campos ---
   for (const enlace of links) {
     log.info(`Procesando → ${enlace}`);
     await page.goto(enlace, { waitUntil: "domcontentloaded" });
