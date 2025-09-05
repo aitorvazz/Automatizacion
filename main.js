@@ -1,7 +1,7 @@
 import { Actor, log } from "apify";
 import { chromium } from "playwright";
 
-// URL de resultados YA filtrada (la que nos diste)
+// URL de resultados YA filtrada
 const RESULTS_URL = "https://www.contratacion.euskadi.eus/ac70cPublicidadWar/informacionAmpliadaAnuncios/search";
 
 // Patrones de destino
@@ -51,7 +51,6 @@ await Actor.main(async () => {
     const p = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     try {
       await p.goto(detailUrl, { waitUntil: "domcontentloaded" });
-      await p.waitForLoadState("domcontentloaded").catch(()=>{});
       await p.waitForLoadState("networkidle", { timeout: 8000 }).catch(()=>{});
 
       const titulo = (await p.locator("h1, .titulo, .cabecera h1").first().innerText().catch(() => "")).trim() || null;
@@ -133,9 +132,9 @@ await Actor.main(async () => {
   await page.goto(RESULTS_URL, { waitUntil: "domcontentloaded" });
   await waitIdle(12000);
 
-  // ---------- Recolector de enlaces en resultados ----------
+  // ---------- Recolector de enlaces en resultados (¡ARREGLO AQUÍ!) ----------
   const collectLinks = async (ctx) => {
-    return await ctx.evaluate((expRx, avisoRx) => {
+    return await ctx.evaluate(({ expRx, avisoRx }) => {
       const EXP = new RegExp(expRx, "i");
       const AV  = new RegExp(avisoRx, "i");
       const abs = (u) => new URL(u, location.href).toString();
@@ -152,7 +151,7 @@ await Actor.main(async () => {
         else if (AV.test(url)) out.push({ tipo: "aviso", url });
       }
 
-      // Caso 2: onclick con URL embebida (a veces usan window.open(...))
+      // Caso 2: onclick con URL embebida
       for (const el of Array.from(scope.querySelectorAll("[onclick]"))) {
         const js = el.getAttribute("onclick") || "";
         const m = js.match(/https?:\/\/[^\s'"]+/);
@@ -172,10 +171,10 @@ await Actor.main(async () => {
         else if (AV.test(url)) out.push({ tipo: "aviso", url });
       }
 
-      // Unicos
+      // Únicos
       const seen = new Set();
       return out.filter(i => { if (seen.has(i.url)) return false; seen.add(i.url); return true; });
-    }, EXPEDIENTE_RE.source, AVISO_RE.source);
+    }, { expRx: EXPEDIENTE_RE.source, avisoRx: AVISO_RE.source });
   };
 
   // ---------- Botón “Siguiente” ----------
@@ -207,8 +206,10 @@ await Actor.main(async () => {
   let idx = 1;
 
   while (true) {
-    // recolectar en página + iframes
+    // recolectar en página
     let items = await collectLinks(page);
+
+    // y en iframes (misma función; NO pasar múltiples args)
     for (const fr of page.frames()) {
       try { items = items.concat(await collectLinks(fr)); } catch {}
     }
