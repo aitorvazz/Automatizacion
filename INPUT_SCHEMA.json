@@ -1,0 +1,24 @@
+{
+  "title": "Scraper Euskadi",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "startUrl": {
+      "title": "URL de inicio (listado filtrado)",
+      "type": "string",
+      "editor": "textfield",
+      "description": "Pon aquí la URL del listado de anuncios filtrados en contratación.euskadi.eus"
+    },
+    "maxPages": {
+      "title": "Máximo de páginas a recorrer",
+      "type": "integer",
+      "default": 20
+    },
+    "headless": {
+      "title": "Ejecutar en headless",
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "required": ["startUrl"]
+}
