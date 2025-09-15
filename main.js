@@ -2,51 +2,53 @@ import { Actor, log } from 'apify';
 import { chromium } from 'playwright';
 
 const BASE_URL = 'https://www.contratacion.euskadi.eus/webkpe00-kpeperfi/es/ac70cPublicidadWar/busquedaAnuncios?locale=es';
+
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function acceptCookies(page) {
     try {
-        const btn = await page.locator('button:has-text("Aceptar")');
-        if (await btn.count()) {
-            await btn.click({ timeout: 3000 });
+        // Esperamos que el botón de cookies esté disponible
+        const cookiesButton = page.locator('button:has-text("Aceptar")');
+        if (await cookiesButton.count()) {
+            await cookiesButton.click({ timeout: 5000 });
             log.info('Cookies aceptadas');
         }
     } catch (error) {
-        log.warning('No se pudo aceptar cookies:', error);
+        log.warning('No se pudo aceptar las cookies:', error);
     }
 }
 
-/** Aplicar filtro "Tipo de contrato" = Suministros */
+/** Aplica el filtro "Tipo de contrato" (Suministros) */
 async function applyTipoContratoFilter(page) {
     const tipoContratoSelect = page.locator('select[name="tipoContrato"]');
-    await tipoContratoSelect.waitFor({ state: 'visible', timeout: 30000 });
+    await tipoContratoSelect.waitFor({ state: 'visible', timeout: 30000 });  // Esperar a que esté visible
     await tipoContratoSelect.selectOption({ label: 'Suministros' });
     log.info('Filtro aplicado: Tipo de contrato = Suministros');
 }
 
-/** Aplicar filtro "Estado de tramitación" = Abierto */
+/** Aplica el filtro "Estado de tramitación" (Abierto) */
 async function applyEstadoTramitacionFilter(page) {
     const estadoTramitacionSelect = page.locator('select[name="estadoTramitacion"]');
-    await estadoTramitacionSelect.waitFor({ state: 'visible', timeout: 30000 });
+    await estadoTramitacionSelect.waitFor({ state: 'visible', timeout: 30000 });  // Esperar a que esté visible
     await estadoTramitacionSelect.selectOption({ label: 'Abierto' });
     log.info('Filtro aplicado: Estado de tramitación = Abierto');
 }
 
-/** Hacer clic en el botón "Buscar" */
+/** Hace clic en el botón "Buscar" */
 async function clickSearch(page) {
-    const button = page.locator('button:has-text("Buscar")');
-    if (await button.count()) {
-        await button.click();
+    const searchButton = page.locator('button:has-text("Buscar")');
+    if (await searchButton.count()) {
+        await searchButton.click();
         log.info('Se ha hecho clic en Buscar');
-        await page.waitForLoadState('networkidle'); // Espera hasta que la página termine de cargar
+        await page.waitForLoadState('networkidle');  // Espera a que la página termine de cargar
     } else {
         log.warning('No se encontró el botón de Buscar');
     }
 }
 
-/** Extrae los resultados de la búsqueda */
+/** Extrae todos los resultados de la búsqueda */
 async function extractResults(page) {
-    const rows = await page.locator('.searchResultRow');
+    const rows = page.locator('.searchResultRow');  // Asegúrate de que esta clase esté en la tabla de resultados
     const rowCount = await rows.count();
     const data = [];
 
@@ -81,14 +83,14 @@ await Actor.main(async () => {
         // Aceptar cookies si es necesario
         await acceptCookies(page);
 
-        // Aplicar los filtros: Tipo de contrato = Suministros y Estado de tramitación = Abierto
-        await applyTipoContratoFilter(page);
-        await applyEstadoTramitacionFilter(page);
+        // Aplicar los filtros:
+        await applyTipoContratoFilter(page);  // Filtro "Tipo de contrato" = Suministros
+        await applyEstadoTramitacionFilter(page);  // Filtro "Estado de tramitación" = Abierto
 
         // Hacer clic en "Buscar"
         await clickSearch(page);
 
-        // Extraer resultados de la búsqueda
+        // Extraer los resultados de la búsqueda
         const results = await extractResults(page);
 
         log.info(`Registros extraídos: ${results.length}`);
