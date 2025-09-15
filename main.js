@@ -2,7 +2,6 @@ import { Actor, log } from 'apify';
 import { chromium } from 'playwright';
 
 const BASE_URL = 'https://www.contratacion.euskadi.eus/webkpe00-kpeperfi/es/ac70cPublicidadWar/busquedaAnuncios?locale=es';
-
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function acceptCookies(page) {
@@ -10,6 +9,7 @@ async function acceptCookies(page) {
         const btn = await page.locator('button:has-text("Aceptar")');
         if (await btn.count()) {
             await btn.click({ timeout: 3000 });
+            log.info('Cookies aceptadas');
         }
     } catch (error) {
         log.warning('No se pudo aceptar cookies:', error);
@@ -35,69 +35,29 @@ async function clickSearch(page) {
     }
 }
 
-/** Espera hasta que la tabla esté completamente cargada */
-async function waitForTableReady(page, timeoutMs = 15000) {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-        const rows = await page.locator('#tableExpedientePublicado tbody tr').count();
-        if (rows > 0) {
-            return true;
-        }
-        await sleep(500);
-    }
-    log.warning('La tabla no está lista después del tiempo de espera.');
-    return false;
-}
-
-/** Extrae los datos de una fila */
-async function extractRowData(row) {
-    const cells = await row.locator('td').allTextContents();
-    return {
-        expediente: cells[0] || '',
-        tipoContrato: cells[1] || '',
-        estadoTramitacion: cells[2] || '',
-        fechaPublicacion: cells[3] || '',
-        presupuestoSinIva: cells[4] || '',
-    };
-}
-
-/** Extrae todos los resultados de la tabla */
-async function extractTableData(page) {
-    const rows = page.locator('#tableExpedientePublicado tbody tr');
+/** Extrae los resultados de la búsqueda */
+async function extractResults(page) {
+    const rows = await page.locator('.searchResultRow');
     const rowCount = await rows.count();
     const data = [];
 
     for (let i = 0; i < rowCount; i++) {
         const row = rows.nth(i);
-        const rowData = await extractRowData(row);
-        data.push(rowData);
+        const result = {
+            expediente: await row.locator('.expediente').innerText(),
+            tipoContrato: await row.locator('.tipoContrato').innerText(),
+            estadoTramitacion: await row.locator('.estadoTramitacion').innerText(),
+            fechaPublicacion: await row.locator('.fechaPublicacion').innerText(),
+            presupuestoSinIva: await row.locator('.presupuestoSinIva').innerText(),
+        };
+        data.push(result);
     }
 
     return data;
 }
 
-/** Scrapea la página actual */
-async function scrapeCurrentPage(page) {
-    const data = await extractTableData(page);
-    log.info(`Registros extraídos: ${data.length}`);
-    return data;
-}
-
-/** Pasa a la siguiente página de la tabla */
-async function goToNextPage(page) {
-    const nextButton = page.locator('#tableExpedientePublicado_next a');
-    if (await nextButton.count()) {
-        await nextButton.click();
-        await page.waitForLoadState('networkidle');
-        return true;
-    }
-    return false;
-}
-
-/** Principal */
 await Actor.main(async () => {
     const input = await Actor.getInput();
-    const maxPages = input?.maxPages || 5;
     const headless = input?.headless !== undefined ? input.headless : true;
 
     log.info('Iniciando scraping en: ', BASE_URL);
@@ -119,24 +79,16 @@ await Actor.main(async () => {
         // Hacer clic en "Buscar"
         await clickSearch(page);
 
-        // Esperar a que la tabla esté cargada
-        const isTableReady = await waitForTableReady(page);
-        if (!isTableReady) {
-            throw new Error('La tabla no se cargó correctamente');
-        }
+        // Extraer resultados de la búsqueda
+        const results = await extractResults(page);
 
-        let totalRecords = 0;
-        for (let pageNumber = 1; pageNumber <= maxPages; pageNumber++) {
-            log.info(`Procesando página ${pageNumber}...`);
-            const data = await scrapeCurrentPage(page);
-            totalRecords += data.length;
-            await Actor.pushData(data);
+        log.info(`Registros extraídos: ${results.length}`);
 
-            const hasNextPage = await goToNextPage(page);
-            if (!hasNextPage) break;
-        }
+        // Almacenar los resultados en el dataset
+        await Actor.pushData(results);
 
-        log.info(`Scraping completado. Total de registros: ${totalRecords}`);
+        log.info(`Scraping completado. Total de registros: ${results.length}`);
+
         await browser.close();
     } catch (error) {
         log.error('Error durante el scraping:', error);
