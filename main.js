@@ -2,7 +2,6 @@ import { Actor, log } from 'apify';
 import { chromium } from 'playwright';
 
 const BASE_URL = 'https://www.contratacion.euskadi.eus/webkpe00-kpeperfi/es/ac70cPublicidadWar/busquedaAnuncios?locale=es';
-
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function acceptCookies(page) {
@@ -18,20 +17,34 @@ async function acceptCookies(page) {
     }
 }
 
-/** Aplica el filtro "Tipo de contrato" (Suministros) */
+/** Aplica el filtro "Tipo de contrato" = Suministros */
 async function applyTipoContratoFilter(page) {
     const tipoContratoSelect = page.locator('select[name="tipoContrato"]');
-    await tipoContratoSelect.waitFor({ state: 'visible', timeout: 30000 });  // Esperar a que esté visible
-    await tipoContratoSelect.selectOption({ label: 'Suministros' });
-    log.info('Filtro aplicado: Tipo de contrato = Suministros');
+    
+    // Esperar a que el selector sea visible y listo para interactuar
+    try {
+        await tipoContratoSelect.waitFor({ state: 'visible', timeout: 50000 });  // Esperamos más tiempo
+        await tipoContratoSelect.selectOption({ label: 'Suministros' });
+        log.info('Filtro aplicado: Tipo de contrato = Suministros');
+    } catch (error) {
+        log.error('No se pudo aplicar el filtro "Tipo de contrato":', error);
+        throw new Error('No se pudo encontrar o seleccionar el filtro "Tipo de contrato"');
+    }
 }
 
-/** Aplica el filtro "Estado de tramitación" (Abierto) */
+/** Aplica el filtro "Estado de tramitación" = Abierto */
 async function applyEstadoTramitacionFilter(page) {
     const estadoTramitacionSelect = page.locator('select[name="estadoTramitacion"]');
-    await estadoTramitacionSelect.waitFor({ state: 'visible', timeout: 30000 });  // Esperar a que esté visible
-    await estadoTramitacionSelect.selectOption({ label: 'Abierto' });
-    log.info('Filtro aplicado: Estado de tramitación = Abierto');
+    
+    // Esperar a que el selector sea visible y listo para interactuar
+    try {
+        await estadoTramitacionSelect.waitFor({ state: 'visible', timeout: 50000 });  // Esperamos más tiempo
+        await estadoTramitacionSelect.selectOption({ label: 'Abierto' });
+        log.info('Filtro aplicado: Estado de tramitación = Abierto');
+    } catch (error) {
+        log.error('No se pudo aplicar el filtro "Estado de tramitación":', error);
+        throw new Error('No se pudo encontrar o seleccionar el filtro "Estado de tramitación"');
+    }
 }
 
 /** Hace clic en el botón "Buscar" */
