@@ -1,29 +1,21 @@
 {
-  "title": "Scraper Euskadi Suministros",
-  "description": "Extrae los 11 parámetros de cada anuncio en contratación.euskadi.eus a partir de una URL filtrada.",
+  "title": "Parámetros de ejecución",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
-    "startUrl": {
-      "title": "URL del listado filtrado",
-      "type": "string",
-      "editor": "textfield",
-      "description": "Pon aquí la URL del listado en contratación.euskadi.eus con los filtros aplicados (ej. Suministros + Abierto).",
-      "prefill": "https://www.contratacion.euskadi.eus/webkpe00-kpeperfi/es/ac70cPublicidadWar/busquedaAnuncios?locale=es"
-    },
     "maxPages": {
-      "title": "Número máximo de páginas",
+      "title": "Páginas máximas de tabla",
       "type": "integer",
-      "minimum": 1,
-      "default": 20,
-      "description": "Cuántas páginas de resultados recorrer como máximo (cada página suele tener 10 anuncios)."
+      "description": "Número de páginas a paginar en la tabla principal.",
+      "default": 5,
+      "minimum": 1
     },
     "headless": {
-      "title": "Ejecutar en modo headless",
+      "title": "Ejecución headless",
       "type": "boolean",
-      "default": true,
-      "description": "Si está activado, el navegador no se abre con ventana visible."
+      "description": "Si desactivar la UI del navegador.",
+      "default": true
     }
   },
-  "required": ["startUrl"]
+  "required": []
 }
