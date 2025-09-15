@@ -1,6 +1,15 @@
 {
   "name": "euskadi-suministros-abiertos",
+  "title": "Euskadi - Suministros Abiertos",
+  "description": "Actor que aplica los filtros (Tipo: Suministros, Estado: Abierto) y extrae resultados a Dataset.",
   "version": "1.0",
   "buildTag": "latest",
-  "env": { "APIFY_DISABLE_OUTDATED_WARNING": "1" }
+  "env": {
+    "APIFY_DISABLE_OUTDATED_WARNING": "1"
+  },
+  "storages": {
+    "dataset": {
+      "actorSpecification": 1
+    }
+  }
 }
