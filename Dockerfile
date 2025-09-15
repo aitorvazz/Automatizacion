@@ -1,20 +1,22 @@
-# Imagen base con Node 20 + Playwright + Xvfb listos
+# Usamos la imagen base de Apify que ya tiene Playwright instalado
 FROM apify/actor-node-playwright:latest
 
-# Entorno
+# Configuramos las variables de entorno
 ENV NODE_ENV=production \
     APIFY_DISABLE_OUTDATED_WARNING=1 \
     PUPPETEER_SKIP_DOWNLOAD=true
 
-# Instala dependencias (sin dev). Omitimos package-lock porque no lo usas.
-COPY package.json ./
-RUN npm install --omit=dev
+# Copiamos el archivo package.json y el package-lock.json para instalar las dependencias
+COPY package.json package-lock.json* ./
+
+# Instalamos las dependencias
+RUN npm ci --omit=dev || npm install --omit=dev
 
 # Copiamos el resto del código
 COPY . ./
 
-# Validación de sintaxis (usa "test:syntax" del package.json)
+# Validamos la sintaxis de nuestro main.js (opcional)
 RUN npm run test:syntax
 
-# Entrada
-CMD ["npm","start"]
+# Comando por defecto cuando el contenedor se inicie
+CMD ["npm", "start"]
