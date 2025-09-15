@@ -11,9 +11,6 @@ import { chromium } from 'playwright';
 const BASE_URL = 'https://www.contratacion.euskadi.eus/webkpe00-kpeperfi/es/ac70cPublicidadWar/busquedaAnuncios?locale=es';
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-
-
-
 async function acceptCookies(page) {
     try {
         const btn = page.getByRole('button', { name: /Aceptar|Aceptar todas|Onartu|Aceptar cookies/i });
@@ -36,6 +33,7 @@ async function selectByOptionTextAnywhere(page, optionRegex) {
         }
         if (idx >= 0) {
             try {
+                // Playwright no acepta RegExp directamente en label; forzamos fallback
                 await sel.selectOption({ label: optionRegex });
                 return true;
             } catch {
@@ -52,13 +50,11 @@ async function selectByOptionTextAnywhere(page, optionRegex) {
 
 /** Clic en Buscar dentro del contenedor del formulario de filtros */
 async function clickSearch(page) {
-    // Prioriza botones en el mismo contenedor que los selects
     const formContainer = await (async () => {
         const firstSelect = page.locator('select').first();
         if (await firstSelect.count()) {
             const handle = await firstSelect.elementHandle();
             if (handle) {
-                // sube hasta un contenedor tipo form/section
                 return page.locator('form:has(select), section:has(select), div:has(select)').first();
             }
         }
@@ -97,7 +93,6 @@ async function waitForTableReady(page, timeoutMs = 15000) {
 
 /** Obtiene link de expediente en la fila (si existe) */
 async function getExpedienteLinkFromRow(row, pageUrl) {
-    // Suele estar en la primera columna; si no, toma el primer <a> de la fila
     const a = row.locator('td a[href]').first();
     if (await a.count()) {
         const href = await a.getAttribute('href').catch(() => null);
@@ -164,7 +159,9 @@ async function getValueByLabel(page, labelRegex) {
     return '';
 }
 
-@@ -34,90 +166,190 @@ async function getLinkHrefByLabel(page, labelRegex) {
+/** Obtiene un href asociado a una etiqueta concreta en la ficha */
+async function getLinkHrefByLabel(page, labelRegex) {
+    const rows = page.locator('table tr');
     for (let i = 0, n = await rows.count(); i < n; i++) {
         const row = rows.nth(i);
         const th = row.locator('th, td strong, td b').first();
@@ -223,18 +220,14 @@ async function scrapeCurrentTablePage(page, context) {
     const count = await rows.count();
     let total = 0;
 
-
     for (let i = 0; i < count; i++) {
         const row = rows.nth(i);
-        // Intenta mapear por cabeceras (por si Expediente/Fechas están en listado)
         const rowObj = await mapRowByHeaders(page, row);
 
-        // Intenta link a ficha
         const href = await getExpedienteLinkFromRow(row, page.url());
         let data;
 
         if (href) {
-            // Abrir ficha en nueva pestaña
             try {
                 const detail = await context.newPage();
                 await detail.goto(href, { waitUntil: 'domcontentloaded', timeout: 60000 });
@@ -247,7 +240,6 @@ async function scrapeCurrentTablePage(page, context) {
                 continue;
             }
         } else {
-            // Sin link claro: intenta extraer del propio listado (best-effort)
             data = {
                 expediente: rowObj['Expediente'] || rowObj['expediente'] || '',
                 fechaPrimeraPublicacion: rowObj['Fecha primera publicación'] || '',
@@ -259,12 +251,11 @@ async function scrapeCurrentTablePage(page, context) {
                 presupuestoSinIva: rowObj['Presupuesto del contrato sin IVA'] || '',
                 poderAdjudicador: rowObj['Poder adjudicador'] || '',
                 entidadImpulsora: rowObj['Entidad impulsora'] || '',
-                urlLicitacionElectronica: '', // normalmente solo está en ficha
+                urlLicitacionElectronica: '',
                 urlFicha: '',
             };
         }
 
-        // Fallback: si desde ficha faltan campos, rellena con listado cuando haya
         const merged = {
             expediente: data.expediente || rowObj['Expediente'] || '',
             fechaPrimeraPublicacion: data.fechaPrimeraPublicacion || rowObj['Fecha primera publicación'] || '',
@@ -297,7 +288,6 @@ async function gotoNextTablePage(page) {
     const nextLink = nextWrap.locator('a');
     if (!(await nextLink.count())) return false;
     await nextLink.first().click();
-    // Espera a que cambien las filas (observa la primera celda)
     await page.waitForLoadState('domcontentloaded').catch(() => {});
     await sleep(300);
     return true;
@@ -318,10 +308,9 @@ await Actor.main(async () => {
 
     try {
         await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
-
         await acceptCookies(page);
 
-        // Aplicar filtros por interacción real
+        // Aplicar filtros: Tipo = Suministros, Estado = Abierto
         const okTipo = await selectByOptionTextAnywhere(page, /Suministros/i);
         const okEstado = await selectByOptionTextAnywhere(page, /Abierto/i);
         if (!okTipo) log.warning('No se pudo fijar Tipo de contrato = Suministros');
@@ -330,7 +319,6 @@ await Actor.main(async () => {
         const clicked = await clickSearch(page);
         if (!clicked) log.warning('No se pudo hacer clic en Buscar/Filtrar');
 
-        // Esperar a la tabla principal
         const ready = await waitForTableReady(page, 20000);
         log.info(`#tableExpedientePublicado -> ${ready.infoTxt || `filas: ${ready.rows}`}`);
         if (ready.rows === 0) log.warning('Sin filas tras la búsqueda (¿filtros no aplicados o sin resultados?).');
