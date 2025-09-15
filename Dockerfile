@@ -6,11 +6,11 @@ ENV NODE_ENV=production \
     APIFY_DISABLE_OUTDATED_WARNING=1 \
     PUPPETEER_SKIP_DOWNLOAD=true
 
-# Copiamos el archivo package.json y el package-lock.json para instalar las dependencias
+# Copiamos el archivo package.json y el package-lock.json (si ya está disponible)
 COPY package.json package-lock.json* ./
 
-# Instalamos las dependencias
-RUN npm ci --omit=dev || npm install --omit=dev
+# Instalamos dependencias y generamos el package-lock.json si no está presente
+RUN npm install --omit=dev
 
 # Copiamos el resto del código
 COPY . ./
