@@ -16,19 +16,23 @@ async function acceptCookies(page) {
     }
 }
 
-/** Aplicar el filtro "Tipo de contrato" */
-async function applyFilter(page, filterName, filterValue) {
-    const select = page.locator(`select[name="${filterName}"]`);
-
-    // Esperar a que el select esté visible y listo para interactuar
-    await select.waitFor({ state: 'visible', timeout: 30000 });
-
-    // Aplicar el filtro
-    await select.selectOption({ label: filterValue });
-    log.info(`Filtro aplicado: ${filterName} = ${filterValue}`);
+/** Aplicar filtro "Tipo de contrato" = Suministros */
+async function applyTipoContratoFilter(page) {
+    const tipoContratoSelect = page.locator('select[name="tipoContrato"]');
+    await tipoContratoSelect.waitFor({ state: 'visible', timeout: 30000 });
+    await tipoContratoSelect.selectOption({ label: 'Suministros' });
+    log.info('Filtro aplicado: Tipo de contrato = Suministros');
 }
 
-/** Clic en el botón "Buscar" */
+/** Aplicar filtro "Estado de tramitación" = Abierto */
+async function applyEstadoTramitacionFilter(page) {
+    const estadoTramitacionSelect = page.locator('select[name="estadoTramitacion"]');
+    await estadoTramitacionSelect.waitFor({ state: 'visible', timeout: 30000 });
+    await estadoTramitacionSelect.selectOption({ label: 'Abierto' });
+    log.info('Filtro aplicado: Estado de tramitación = Abierto');
+}
+
+/** Hacer clic en el botón "Buscar" */
 async function clickSearch(page) {
     const button = page.locator('button:has-text("Buscar")');
     if (await button.count()) {
@@ -77,9 +81,9 @@ await Actor.main(async () => {
         // Aceptar cookies si es necesario
         await acceptCookies(page);
 
-        // Aplicar filtros
-        await applyFilter(page, 'tipoContrato', 'Suministros');
-        await applyFilter(page, 'estadoTramitacion', 'Abierto');
+        // Aplicar los filtros: Tipo de contrato = Suministros y Estado de tramitación = Abierto
+        await applyTipoContratoFilter(page);
+        await applyEstadoTramitacionFilter(page);
 
         // Hacer clic en "Buscar"
         await clickSearch(page);
