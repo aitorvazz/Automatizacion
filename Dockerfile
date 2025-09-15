@@ -6,7 +6,7 @@ ENV NODE_ENV=production \
     APIFY_DISABLE_OUTDATED_WARNING=1 \
     PUPPETEER_SKIP_DOWNLOAD=true
 
-# Copiamos el archivo package.json y el package-lock.json (si ya está disponible)
+# Copiamos el archivo package.json y el package-lock.json (si existe)
 COPY package.json package-lock.json* ./
 
 # Instalamos dependencias y generamos el package-lock.json si no está presente
