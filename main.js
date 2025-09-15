@@ -19,10 +19,10 @@ async function acceptCookies(page) {
 /** Aplicar el filtro "Tipo de contrato" */
 async function applyFilter(page, filterName, filterValue) {
     const select = page.locator(`select[name="${filterName}"]`);
-    
-    // Esperamos a que el selector sea visible y esté listo para interactuar
-    await select.waitFor({ state: 'attached', timeout: 30000 });
-    
+
+    // Esperar a que el select esté visible y listo para interactuar
+    await select.waitFor({ state: 'visible', timeout: 30000 });
+
     // Aplicar el filtro
     await select.selectOption({ label: filterValue });
     log.info(`Filtro aplicado: ${filterName} = ${filterValue}`);
